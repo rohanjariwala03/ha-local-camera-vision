@@ -40,7 +40,7 @@ _LOGGER = logging.getLogger(__name__)
 
 CHECK_INTERVAL = timedelta(minutes=1)
 REASSOCIATE_SECONDS = 12 * 3600  # also keeps the Blink refresh token in use
-MAX_BACKOFF_SECONDS = 1800
+MAX_BACKOFF_SECONDS = 600  # like MAX_POLL_SECONDS: back soon after a sleeping host wakes
 STALE_SECONDS = 300  # pushes queued while HA was offline are not "now" anymore
 NESTED_KEYS = ("data", "payload", "message", "notification")
 ID_KEYS = ("camera_id", "doorbell_id", "owl_id", "device_id", "camera")

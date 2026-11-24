@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.9.1
+
+- **Blink stays signed in across sleep.** When Blink turns an access token away (a 401, often right after
+  the computer running Home Assistant wakes up with its clock behind), the integration now renews the
+  token and retries instead of asking you to sign in again. This covers polling
+  and instant events. You're asked to sign in only when Blink refuses the renewal itself, and the log
+  then says why (`Blink refused the refresh_token grant for the ios client: 400 invalid_grant ...`).
+- **Back sooner after an outage.** Failed polls back off to at most 15 minutes (was 60) and the push
+  reconnect to 10 (was 30). Home Assistant's timers don't run while a VM host sleeps, so a long backoff
+  kept Blink unavailable for a long time after a wake.
+
 ## 0.9.0
 
 - **Detection zones.** `set_zone` gives a camera a polygon where detections count; people, cars and

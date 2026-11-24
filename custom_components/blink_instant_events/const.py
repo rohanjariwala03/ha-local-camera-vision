@@ -61,7 +61,8 @@ SIGNAL_MOTION = f"{DOMAIN}_motion_{{}}"  # a local camera's motion state changed
 SIGNAL_STREAM = f"{DOMAIN}_stream_{{}}"  # an RTSP camera's stream came or went
 
 POLL_SECONDS = 300
-MAX_POLL_SECONDS = 3600
+# Short: HA timers stop while a VM host sleeps, and after a wake the network often takes minutes to return.
+MAX_POLL_SECONDS = 900
 PUSH_REFRESH_DELAY = 30  # let Blink finish the clip and thumbnail first
 MOTION_RESET_SECONDS = 30
 AUTO_SNAPSHOT_MIN_SECONDS = 300  # at most one automatic snapshot per camera per 5 minutes
