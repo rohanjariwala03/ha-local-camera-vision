@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.9.2
+
+- No change to the integration. Fixes a live view test that failed CI depending on fixture order, and
+  release notes now end with a Buy Me a Coffee line. Released after a green validation run, as the
+  HACS default list requires.
+
 ## 0.9.1
 
 - **Blink stays signed in across sleep.** When Blink turns an access token away (a 401, often right after
