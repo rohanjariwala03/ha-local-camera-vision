@@ -106,8 +106,11 @@ def _trusting(cert: Path) -> ssl.SSLContext:
 
 
 @pytest.fixture
-async def immis(hass: HomeAssistant, tmp_path: Path) -> AsyncGenerator[tuple[FakeImmis, int]]:
-    """The fake server on a free port, its certificate trusted by the live view."""
+async def immis(hass: HomeAssistant, tmp_path: Path, socket_enabled: None) -> AsyncGenerator[tuple[FakeImmis, int]]:
+    """The fake server on a free port, its certificate trusted by the live view.
+
+    Asks for sockets itself: it opens one before hass_client would enable them.
+    """
     context = await hass.async_add_executor_job(_tls_context, tmp_path)
     trusted = await hass.async_add_executor_job(_trusting, tmp_path / "cert.pem")
     fake = FakeImmis(await hass.async_add_executor_job(_camera_ts, tmp_path))
