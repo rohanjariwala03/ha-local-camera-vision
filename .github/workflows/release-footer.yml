@@ -1,0 +1,22 @@
+name: Release footer
+
+# HACS shows release notes in the update dialog, which is where existing users actually look.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  footer:
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          body=$(gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json body -q .body)
+          case "$body" in *buymeacoffee.com*) exit 0 ;; esac
+          printf '%s\n\n---\nIf this saves you a headache, you can [buy me a coffee](https://buymeacoffee.com/rohanjariwala03) ☕\n' "$body" \
+            | gh release edit "$TAG" -R "$GITHUB_REPOSITORY" --notes-file -
