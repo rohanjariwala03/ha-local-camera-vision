@@ -13,7 +13,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlencode, urlsplit
 import uuid
 
-from aiohttp import ClientSession, ClientTimeout
+from aiohttp import ClientResponse, ClientSession, ClientTimeout
 from blinkpy.auth import Auth, UnauthorizedError
 from blinkpy.helpers.constants import OAUTH_SCOPE, OAUTH_TOKEN_URL, OAUTH_TOKEN_USER_AGENT, OAUTH_V2_CLIENT_ID
 
@@ -75,20 +75,27 @@ def callback_code(url: str, state: str) -> str | None:
     return query["code"][0]
 
 
+async def _refused(resp: ClientResponse, form: dict[str, str]) -> None:
+    """Log why Blink refused a token grant, then raise UnauthorizedError (sign in again)."""
+    # Blink's reason ("invalid_grant", ...) carries no secrets, and tells expiry from a refusal.
+    reason = await resp.json(content_type=None) if resp.content_type == "application/json" else {}
+    _LOGGER.warning(
+        "Blink refused the %s grant for the %s client: %s %s %s",
+        form["grant_type"],
+        form["client_id"],
+        resp.status,
+        reason.get("error"),
+        reason.get("error_description"),
+    )
+    raise UnauthorizedError
+
+
 async def _token(session: ClientSession, form: dict[str, str]) -> dict[str, Any]:
     async with session.post(
         OAUTH_TOKEN_URL, data=form, headers={"User-Agent": USER_AGENT, "Accept": "application/json"}, timeout=TIMEOUT
     ) as resp:
         if resp.status in (400, 401):
-            # Blink's reason ("invalid_grant", ...) carries no secrets, and tells expiry from a refusal.
-            reason = await resp.json(content_type=None) if resp.content_type == "application/json" else {}
-            _LOGGER.warning(
-                "Blink refused the %s grant: %s %s",
-                form["grant_type"],
-                reason.get("error"),
-                reason.get("error_description"),
-            )
-            raise UnauthorizedError
+            await _refused(resp, form)
         resp.raise_for_status()
         data = await resp.json(content_type=None)
     return {
@@ -199,6 +206,7 @@ class BlinkAuth(Auth):
         super().__init__(login_data, no_prompt=True, session=session)
         self._on_update = on_update
         self._renewal: asyncio.Task[None] | None = None
+        self.refused = False  # Blink turned the refresh token away: only signing in again helps
 
     async def refresh_tokens(self, refresh: bool = False) -> bool:
         """Renew the access token; UnauthorizedError means sign in again.
@@ -214,20 +222,22 @@ class BlinkAuth(Auth):
         return True
 
     async def _renew(self) -> None:
+        form = {
+            "grant_type": "refresh_token",
+            "refresh_token": self.refresh_token,
+            "client_id": OAUTH_V2_CLIENT_ID,
+            "scope": OAUTH_SCOPE,
+            "hardware_id": self.hardware_id,
+        }
         async with self.session.post(
             OAUTH_TOKEN_URL,
-            data={
-                "grant_type": "refresh_token",
-                "refresh_token": self.refresh_token,
-                "client_id": OAUTH_V2_CLIENT_ID,
-                "scope": OAUTH_SCOPE,
-                "hardware_id": self.hardware_id,
-            },
+            data=form,
             headers={"User-Agent": OAUTH_TOKEN_USER_AGENT, "Accept": "*/*"},
             timeout=TIMEOUT,
         ) as resp:
             if resp.status in (400, 401, 403):
-                raise UnauthorizedError
+                self.refused = True
+                await _refused(resp, form)
             resp.raise_for_status()
             data = await resp.json()
         self.token = data["access_token"]
@@ -235,6 +245,26 @@ class BlinkAuth(Auth):
         self.expires_in = data.get("expires_in", 3600)
         self.expiration_date = time.time() + self.expires_in
         self._on_update(dict(self.login_attributes))
+
+    async def query(self, *args: Any, **kwargs: Any) -> Any:
+        """blinkpy's request, renewing once and retrying when Blink turns the access token away.
+
+        blinkpy treats any 401 as signed out, but a 401 alone doesn't prove that: after the host
+        wakes from sleep its clock can lag, so a token that looks valid here has already expired.
+        Only a refused renewal means signing in again.
+        """
+        sent = self.token
+        try:
+            return await super().query(*args, **kwargs)
+        except UnauthorizedError:
+            if kwargs.get("is_retry") or self.refused:
+                raise
+        if self.token == sent:  # no other request renewed meanwhile
+            self.expiration_date = 0
+        await self.refresh_tokens(refresh=True)
+        if (headers := kwargs.get("headers")) and "Authorization" in headers:
+            headers["Authorization"] = f"Bearer {self.token}"
+        return await super().query(*args, **{**kwargs, "is_retry": True})
 
     async def async_token(self) -> str:
         """A valid access token."""
@@ -251,7 +281,7 @@ class BlinkAccount:
         self._session = session
         self.auth = auth
 
-    async def _call(self, method: str, path: str, body: dict[str, Any]) -> Any:
+    async def _call(self, method: str, path: str, body: dict[str, Any], retry: bool = True) -> Any:
         headers = {"Authorization": f"Bearer {await self.auth.async_token()}"}
         if self.auth.client_id:
             headers["Client-Id"] = str(self.auth.client_id)
@@ -262,10 +292,14 @@ class BlinkAccount:
             headers=headers,
             timeout=TIMEOUT,
         ) as resp:
-            if resp.status == 401:
-                raise UnauthorizedError
-            resp.raise_for_status()
-            return await resp.json(content_type=None)
+            if resp.status != 401:
+                resp.raise_for_status()
+                return await resp.json(content_type=None)
+        if not retry:
+            raise UnauthorizedError
+        # As BlinkAuth.query: renew once and retry; only a refused renewal means signing in again.
+        self.auth.data["expiration_date"] = 0
+        return await self._call(method, path, body, retry=False)
 
     async def async_associate(self, fcm_token: str) -> None:
         """Tell Blink to push this account's notifications to our FCM token.
